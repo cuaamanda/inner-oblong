@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
+import { signout } from '@/app/actions/auth'
 
 export default async function AdminLayout({
     children,
@@ -32,10 +33,16 @@ export default async function AdminLayout({
             <header className="border-b bg-muted/40 p-4">
                 <div className="container mx-auto flex items-center justify-between">
                     <div className="font-bold text-lg">Admin Dashboard</div>
-                    <nav className="flex gap-4 text-sm font-medium">
+                    <nav className="flex items-center gap-4 text-sm font-medium">
                         <Link href="/admin" className="hover:underline">Overview</Link>
+                        <Link href="/admin/introductions" className="hover:underline">Introductions</Link>
                         <Link href="/admin/applications" className="hover:underline">Applications</Link>
-                        <Link href="/" className="hover:underline text-muted-foreground">Back to Site</Link>
+                        <Link href="/" className="hover:underline text-muted-foreground mr-2">Back to Site</Link>
+                        <form action={signout}>
+                            <button type="submit" className="bg-destructive/10 text-destructive hover:bg-destructive/20 px-3 py-1 rounded-md transition-colors">
+                                Logout
+                            </button>
+                        </form>
                     </nav>
                 </div>
             </header>

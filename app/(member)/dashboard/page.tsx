@@ -1,67 +1,115 @@
 import { createClient } from '@/lib/supabase/server'
+import { WelcomeCard } from '@/components/features/member/welcome-card'
+import { UpcomingIntroCard } from '@/components/features/member/upcoming-intro-card'
+import { IntroHistory } from '@/components/features/member/intro-history'
+import { MembershipCard } from '@/components/features/member/membership-card'
+import { redirect } from 'next/navigation'
 import { signout } from '@/app/actions/auth'
-import { createStripePortalSession } from '@/app/actions/subscriptions'
 
 export default async function DashboardPage() {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
 
-    // Fetch subscription details
-    const { data: subscription } = await supabase
-        .from('subscriptions')
-        .select('*')
-        .eq('user_id', user?.id)
-        .single()
+    if (!user) {
+        redirect('/login')
+    }
+
+    // Fetch user profile and subscription
+    const [
+        { data: profile },
+        { data: subscription },
+        { data: introsRaw }
+    ] = await Promise.all([
+        supabase.from('users').select('*').eq('id', user.id).single(),
+        supabase.from('subscriptions').select('*').eq('user_id', user.id).single(),
+        supabase
+            .from('introductions')
+            .select(`
+                *,
+                member_a:users!member_a_id(id, name, member_profiles(company, role_title)),
+                member_b:users!member_b_id(id, name, member_profiles(company, role_title)),
+                introduction_feedback(member_id)
+            `)
+            .or(`member_a_id.eq.${user.id},member_b_id.eq.${user.id}`)
+            .order('created_at', { ascending: false })
+    ])
+
+    // Process introductions
+    const introductions = (introsRaw || []).map(intro => {
+        const isMemberA = intro.member_a_id === user.id
+        const otherMemberData = isMemberA ? intro.member_b : intro.member_a
+
+        return {
+            id: intro.id,
+            status: intro.status,
+            month_year: intro.month_year,
+            sent_at: intro.sent_at,
+            intro_message: intro.intro_message,
+            other_member: {
+                name: otherMemberData?.name || 'Unknown',
+                company: otherMemberData?.member_profiles?.[0]?.company || 'Unknown',
+                role_title: otherMemberData?.member_profiles?.[0]?.role_title || 'Unknown',
+            },
+            feedback_given: (intro.introduction_feedback || []).some(
+                (f: any) => f.member_id === user.id
+            )
+        }
+    })
+
+    const upcomingIntro = introductions.find(i => ['approved', 'sent'].includes(i.status)) || null
+    const pastIntros = introductions.filter(i => i.status === 'completed')
 
     return (
-        <div className="min-h-screen bg-gray-950 text-white p-8">
-            <div className="max-w-4xl mx-auto">
-                <h1 className="text-3xl font-bold mb-6">Dashboard</h1>
-                <div className="space-y-6">
-                    <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
-                        <p className="mb-2 text-xl font-medium">Welcome back, <span className="text-blue-400">{user?.email}</span></p>
-                        <p className="text-sm text-gray-500 mb-6">User ID: {user?.id}</p>
+        <div className="container mx-auto py-8 px-4 sm:px-6 lg:px-8">
+            <div className="flex flex-col gap-8">
+                <WelcomeCard
+                    name={profile?.name || user.email?.split('@')[0] || 'Member'}
+                    tier={subscription?.tier || 'Basic'}
+                />
 
-                        <form action={signout}>
-                            <button className="bg-red-500/10 text-red-400 border border-red-500/20 px-4 py-2 rounded-lg hover:bg-red-500/20 transition-colors">
-                                Sign Out
-                            </button>
-                        </form>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                    <div className="md:col-span-2 space-y-8">
+                        <UpcomingIntroCard introduction={upcomingIntro} />
+                        <IntroHistory introductions={pastIntros} />
                     </div>
 
-                    <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
-                        <h2 className="text-xl font-semibold mb-4">Subscription Details</h2>
+                    <div className="space-y-8">
+                        <MembershipCard
+                            tier={subscription?.tier || 'Basic'}
+                            status={subscription?.status || 'inactive'}
+                            nextBillingDate={subscription?.current_period_end}
+                        />
 
-                        {subscription ? (
-                            <div className="space-y-4">
-                                <div className="flex items-center gap-3">
-                                    <span className="text-gray-400">Status:</span>
-                                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold uppercase ${subscription.status === 'active' ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'
-                                        }`}>
-                                        {subscription.status}
-                                    </span>
-                                </div>
-
-                                {subscription.cancel_at_period_end && (
-                                    <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4">
-                                        <p className="text-yellow-500 text-sm">
-                                            Your subscription will be cancelled on <strong>{new Date(subscription.current_period_end).toLocaleDateString()}</strong>.
-                                            You will still have access until then.
-                                        </p>
-                                    </div>
+                        {/* Quick links card */}
+                        <div className="rounded-xl border bg-card p-6 shadow-sm">
+                            <h3 className="font-semibold mb-4">Quick Links</h3>
+                            <ul className="space-y-3 text-sm">
+                                <li>
+                                    <a href="/profile" className="text-primary hover:underline">Edit Profile</a>
+                                </li>
+                                {profile?.role === 'admin' && (
+                                    <li>
+                                        <a href="/admin" className="text-primary hover:underline font-bold">Admin Dashboard</a>
+                                    </li>
                                 )}
-
-                                <div className="pt-2">
-                                    <form action={createStripePortalSession}>
-                                        <button className="bg-blue-500/10 text-blue-400 border border-blue-500/20 px-4 py-2 rounded-lg hover:bg-blue-500/20 transition-colors text-sm">
-                                            Manage Subscription
+                                <li>
+                                    <a href="/member/directory" className="text-primary hover:underline">Member Directory</a>
+                                </li>
+                                <li>
+                                    <a href="/faq" className="text-primary hover:underline">How it Works</a>
+                                </li>
+                                <li>
+                                    <a href="mailto:support@innercircle.com" className="text-primary hover:underline">Contact Support</a>
+                                </li>
+                                <li className="pt-2 border-t">
+                                    <form action={signout}>
+                                        <button type="submit" className="text-destructive hover:underline font-medium">
+                                            Logout
                                         </button>
                                     </form>
-                                </div>
-                            </div>
-                        ) : (
-                            <p className="text-gray-500 text-sm">No active subscription found.</p>
-                        )}
+                                </li>
+                            </ul>
+                        </div>
                     </div>
                 </div>
             </div>
