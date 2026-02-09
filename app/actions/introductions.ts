@@ -150,3 +150,95 @@ export async function declineMatch(introductionId: string) {
     revalidatePath('/admin/introductions')
     return { success: true, message: 'Match declined.' }
 }
+
+/**
+ * Updates the intro message for a match.
+ */
+export async function updateIntroMessage(introductionId: string, message: string) {
+    const supabase = await createClient()
+
+    const { error } = await supabase
+        .from('introductions')
+        .update({ intro_message: message })
+        .eq('id', introductionId)
+
+    if (error) {
+        console.error('Error updating intro message:', error)
+        return { success: false, message: 'Failed to update intro message' }
+    }
+
+    revalidatePath('/admin/introductions')
+    return { success: true, message: 'Intro message updated.' }
+}
+
+/**
+ * Sends the introduction email to both parties.
+ */
+export async function sendIntroduction(introductionId: string) {
+    const supabase = await createClient()
+    const { sendEmail } = await import('@/lib/email/send')
+    const { introductionEmailTemplate } = await import('@/lib/email/templates')
+
+    // 1. Fetch introduction and member details
+    const { data: intro, error: fetchError } = await supabase
+        .from('introductions')
+        .select(`
+            id,
+            intro_message,
+            member_a:member_a_id (
+                id,
+                email,
+                name,
+                member_profiles (linkedin_url)
+            ),
+            member_b:member_b_id (
+                id,
+                email,
+                name,
+                member_profiles (linkedin_url)
+            )
+        `)
+        .eq('id', introductionId)
+        .single()
+
+    if (fetchError || !intro) {
+        console.error('Error fetching intro for sending:', fetchError)
+        return { success: false, message: 'Failed to fetch introduction details' }
+    }
+
+    const memberA = intro.member_a as any
+    const memberB = intro.member_b as any
+
+    const emailHtml = introductionEmailTemplate(
+        memberA.name,
+        memberB.name,
+        intro.intro_message || 'You were matched based on your professional profiles.',
+        memberA.member_profiles[0]?.linkedin_url,
+        memberB.member_profiles[0]?.linkedin_url
+    )
+
+    // 2. Send emails
+    const subject = `Inner Circle Introduction: ${memberA.name} <> ${memberB.name}`
+
+    const [resultA, resultB] = await Promise.all([
+        sendEmail({ to: memberA.email, subject, html: emailHtml }),
+        sendEmail({ to: memberB.email, subject, html: emailHtml })
+    ])
+
+    if (!resultA.success || !resultB.success) {
+        return { success: false, message: 'Failed to send one or more emails' }
+    }
+
+    // 3. Update status
+    const { error: updateError } = await supabase
+        .from('introductions')
+        .update({ status: 'sent', sent_at: new Date().toISOString() })
+        .eq('id', introductionId)
+
+    if (updateError) {
+        console.error('Error updating intro status after send:', updateError)
+    }
+
+    revalidatePath('/admin/introductions')
+    return { success: true, message: 'Introduction sent successfully!' }
+}
